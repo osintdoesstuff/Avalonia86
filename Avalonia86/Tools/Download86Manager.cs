@@ -561,7 +561,7 @@ public class Download86Manager : ReactiveObject
                         t.Commit();
                     }
 
-                    job.AddLog($"Entery for {job.ArchiveName} created");
+                    job.AddLog($"Entry for {job.ArchiveName} created");
                     job.AddLog($"");
                 });
 
@@ -751,7 +751,7 @@ public class Download86Manager : ReactiveObject
                 else if (changelog.Count == 1)
                     fjob.AddLog($" -- There was 1 entry in the changelog --");
                 else
-                    fjob.AddLog($" -- Changelog has {changelog.Count} enteries --");
+                    fjob.AddLog($" -- Changelog has {changelog.Count} entries --");
             }
             catch (Exception e)
             {
