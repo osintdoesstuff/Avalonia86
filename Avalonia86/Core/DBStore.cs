@@ -23,6 +23,14 @@ namespace Avalonia86.Core;
 /// </summary>
 internal sealed class DBStore
 {
+    public enum DBTestResult
+    {
+        Ok,
+        Corrupted,
+        TooNew,
+        OtherError
+    }
+
     /// <summary>
     /// Increment when making any change in the DB layout
     /// </summary>
@@ -118,8 +126,47 @@ internal sealed class DBStore
 
         if (!Design.IsDesignMode)
         {
-            if (use_local && TryOpenDB(local_path, out con) || TryOpenDB(app_path, out con))
-                return con;
+            var paths = new List<string>();
+            if (use_local)
+                paths.Add(local_path);
+            paths.Add(app_path);
+
+            foreach (var path in paths)
+            {
+                //Note, we throw exceptions here because the UI has not been initialized yet, so we depend on the caller to show a message box with the error.
+                //      on Windows this is done with the built in MessageBox. On Linux a c libary is used that hopfully works. On Mac, no message is displayed.
+
+                var result = TryOpenDB(path, out con);
+                if (result == DBTestResult.Ok)
+                    return con;
+                else if (result == DBTestResult.TooNew)
+                {
+                    //Note: Without the database we don't know what language the user wants, so we just show the message in English.
+                    throw new Exception($"Settings database at {path} is from a newer version of Avalonia 86. I can't open it.");
+                }
+                else if (result == DBTestResult.Corrupted)
+                {
+                    // We detected a corrupted database file. What to do? Deleting it is likely what the user wants,
+                    // but silently deleting the corrupted file is not ideal. 
+                    //
+                    // Suggested better approach (not implemented):
+                    //  - Initialize an in-memory database so the app/UI can start normally,
+                    //    then pop up a question on what to do once the app has started.
+                    //  - Go ahead and delete the corrupted file, but inform the user about it
+                    //    after the app has started. Perpahs suggest using the import feature
+                    //    to get the VMs back. 
+                    //
+                    // TODO: Figure this out
+                    try { File.Delete(path); }
+                    catch
+                    {
+                        throw new Exception($"Settings database at {path} is corrupted. Try to delete the file.");
+                    }
+
+                    // We drop to the next step, which will try to create a new database
+                    break;
+                }
+            }
 
             //Next, we try to create a new settings database.
             if (use_local && TryCreateDB(local_path, null, out con) || TryCreateDB(app_path, app_folder, out con))
@@ -254,7 +301,7 @@ internal sealed class DBStore
             var r = File.Create(path);
             r.Close();
 
-            if (TryOpenDB(path, out db, false) && InitDB(db))
+            if (TryOpenDB(path, out db, false) == DBTestResult.Ok && InitDB(db))
             {
                 //Message.Log("Using default settings, storing at: " + path);
                 return true;
@@ -277,7 +324,7 @@ internal sealed class DBStore
         }
     }
 
-    private static bool TryOpenDB(string path, out SQLiteConnection db, bool test_db = true)
+    private static DBTestResult TryOpenDB(string path, out SQLiteConnection db, bool test_db = true)
     {
         try
         {
@@ -309,6 +356,16 @@ internal sealed class DBStore
                     {
                         if (test_db)
                         {
+                            //SQLite databases can be corrupted, here we used a built-in command to check if the database is ok.
+                            using (var check = NewCommand(@"PRAGMA integrity_check", db))
+                            using (var r = check.ExecuteReader())
+                            {
+                                if (!r.Read() || r.GetString(0) != "ok")
+                                    return DBTestResult.Corrupted;
+                            }
+
+                            //We also check if the version number is correct, to avoid opening a database from a newer version of the app.
+
                             var fetch = NewCommand(@"select Version from FileInfo", db);
 
                             float major;
@@ -316,11 +373,11 @@ internal sealed class DBStore
                             using (var r = fetch.ExecuteReader())
                             {
                                 if (!r.Read())
-                                    return false;
+                                    return DBTestResult.OtherError;
                                 major = r.GetFloat("Version");
 
                                 if (major > CUR_MAJOR_DB_VER)
-                                    return false;
+                                    return DBTestResult.TooNew;
                             }
 
                             //First version of the DB, does not have the "Minor" column.
@@ -354,7 +411,7 @@ internal sealed class DBStore
                         }
                         
                         //Message.Log("Fetching settings storing at: " + path);
-                        return true;
+                        return DBTestResult.Ok;
                     }
                 }
                 catch { }
@@ -365,7 +422,7 @@ internal sealed class DBStore
         catch { }
 
         db = null;
-        return false;
+        return DBTestResult.OtherError;
     }
 
     internal static void UpdateWindow(string id, double top, double left, double height, double width, bool maximized)
