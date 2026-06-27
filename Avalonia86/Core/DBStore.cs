@@ -541,7 +541,7 @@ internal sealed class DBStore
     /// 
     /// Workaround: Only call this from a "foreach"
     /// </remarks>
-    public IEnumerable<DataReader> Query(string query)
+    public IEnumerable<IDataReader> Query(string query)
     {
         using (var cmd = NewCommand(query, _db))
         using (SQLiteDataReader r = cmd.ExecuteReader())
@@ -558,7 +558,24 @@ internal sealed class DBStore
     /// 
     /// Workaround: Only call this from a "foreach"
     /// </remarks>
-    public IEnumerable<DataReader> Query(string query, params SQLParam[] parameters)
+    public IEnumerable<IDataReader> QueryAll(string query)
+    {
+        using (var cmd = NewCommand(query, _db))
+        using (SQLiteDataReader r = cmd.ExecuteReader())
+        {
+            while (r.Read())
+                yield return new MemoryDataReader(r);
+        }
+    }
+
+    /// <remarks>
+    /// Bug:
+    /// Can potentially leak memory if a reader do not read all values, or if an
+    /// exception happens during reading.
+    /// 
+    /// Workaround: Only call this from a "foreach"
+    /// </remarks>
+    public IEnumerable<IDataReader> Query(string query, params SQLParam[] parameters)
     {
         using (var cmd = NewCommand(query, _db))
         {
@@ -597,23 +614,49 @@ internal sealed class DBStore
 #endif
     }
 
-    public sealed class DataReader
+    public interface IDataReader
     {
-        readonly SQLiteDataReader _r;
+        object this[int col_index] { get; }
+        object this[string name] { get; }
+    }
 
-        public object this[int col_index]
-        {
-            get => _r[col_index];
-        }
+    // Your original live reader
+    private sealed class DataReader : IDataReader
+    {
+        private readonly SQLiteDataReader _r;
 
-        public object this[string name]
-        {
-            get => _r[name];
-        }
+        public object this[int col_index] => _r[col_index];
+        public object this[string name] => _r[name];
 
         public DataReader(SQLiteDataReader r)
         {
             _r = r;
+        }
+    }
+
+    // The new disconnected memory-backed reader
+    private sealed class MemoryDataReader : IDataReader
+    {
+        private readonly object[] _byIndex;
+        private readonly Dictionary<string, object> _byName;
+
+        public object this[int col_index] => _byIndex[col_index];
+        public object this[string name] => _byName[name];
+
+        public MemoryDataReader(SQLiteDataReader r)
+        {
+            int fieldCount = r.FieldCount;
+            _byIndex = new object[fieldCount];
+            _byName = new Dictionary<string, object>(fieldCount, System.StringComparer.OrdinalIgnoreCase);
+
+            for (int i = 0; i < fieldCount; i++)
+            {
+                object value = r.GetValue(i);
+                string name = r.GetName(i);
+
+                _byIndex[i] = value;
+                _byName[name] = value;
+            }
         }
     }
 

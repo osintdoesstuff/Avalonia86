@@ -1,8 +1,8 @@
-﻿using Avalonia86.Tools;
+﻿using Avalonia.Platform;
+using Avalonia.Styling;
+using Avalonia86.Tools;
 using Avalonia86.ViewModels;
 using Avalonia86.Xplat;
-using Avalonia.Platform;
-using Avalonia.Styling;
 using DynamicData;
 using System;
 using System.Collections.Generic;
@@ -10,7 +10,6 @@ using System.ComponentModel;
 using System.Globalization;
 using System.Reflection;
 using static Avalonia86.Core.DBStore;
-using Avalonia;
 
 namespace Avalonia86.Core;
 
@@ -334,22 +333,32 @@ internal class AppSettings
     {
         var to_remove = new HashSet<long>(_machines.Keys);
 
+        // 1. Determine the database query path
+        string query = "select id, name, category, iconpath from VMs";
+
+        // If sorting by date, let SQLite handle it completely
+        if (SortMachineListOrder == "date")
+        {
+            query += SortMachineListDirection == "desc" ? " order by created desc" : " order by created";
+        }
+
+        var vms = _store.QueryAll(query);
+
+        // 2. Apply cross-platform natural sorting if sorted by name
+        if (SortMachineListOrder == "name")
+        {
+            vms = SortVMsNaturally(vms, SortMachineListDirection == "desc");
+        }
+
+        // 3. Process the sorted results
         int count = 0;
         bool notify = false;
 
-        string order_by = SortMachineListOrder == "name" ? "order by name" : "order by created";
-
-        if (SortMachineListDirection == "desc")
-            order_by += " desc";
-
-        foreach (var vm in _store.Query("select id, name, category, iconpath from VMs " + order_by))
+        foreach (var vm in vms)
         {
             var uid = (long)vm["id"];
-
-            //This function should perhaps be changed to add all machines using a enumeration, to reduce
-            //the amount of changes notified to the listener, but in normal circumstances, there are nothing
-            //added to the cache here, unless the app is starting, and in that circumstance there's no listener.
             var v = CreateVisual(uid, (string)vm["name"], vm["category"] as string, vm["iconpath"] as string);
+
             if (v.OrderIndex != count)
             {
                 notify = true;
@@ -357,14 +366,33 @@ internal class AppSettings
             }
 
             count++;
-
             to_remove.Remove(uid);
         }
 
+        // 4. Cache state management
         if (to_remove.Count > 0)
             _machines.RemoveKeys(to_remove);
         else if (notify)
             _machines.Refresh();
+    }
+
+    private IEnumerable<IDataReader> SortVMsNaturally(
+        IEnumerable<IDataReader> vms,
+        bool isDescending)
+    {
+        var list = new List<IDataReader>(vms);
+        var comparer = new NaturalComparer();
+
+        list.Sort((x, y) =>
+        {
+            int result = comparer.Compare(
+                (string)x["name"],
+                (string)y["name"]);
+
+            return isDescending ? -result : result;
+        });
+
+        return list;
     }
 
     private AppSettings(DBStore store) 
@@ -498,16 +526,16 @@ internal class AppSettings
                        new SQLParam("arch", arch), new SQLParam("build", build), new SQLParam("def", def), new SQLParam("id", id));
     }
 
-    public IEnumerable<DataReader> ListExecutables()
+    public IEnumerable<IDataReader> ListExecutables()
     {
         return _store.Query("SELECT ID, IsDef, Name, VMExe, VMRoms, VMAssets, \"Version\", Comment, Arch, Build FROM Executables ORDER BY Name");
     }
-    public IEnumerable<DataReader> GetDefExe()
+    public IEnumerable<IDataReader> GetDefExe()
     {
         return _store.Query("SELECT ID, Name, VMExe, VMRoms, VMAssets, \"Version\", Comment, Arch, Build FROM Executables WHERE IsDef = TRUE");
     }
 
-    public IEnumerable<DataReader> GetExePaths(long uid)
+    public IEnumerable<IDataReader> GetExePaths(long uid)
     {
         return _store.Query("SELECT VMExe, VMRoms, VMAssets, Arch, Build FROM Executables WHERE ID = @id", new SQLParam("id", uid));
     }
