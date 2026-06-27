@@ -344,7 +344,7 @@ internal class AppSettings
 
         var vms = _store.QueryAll(query);
 
-        // 2. Apply cross-platform natural sorting if sorted by name
+        // 2. Apply natural sorting if sorted by name
         if (SortMachineListOrder == "name")
         {
             vms = SortVMsNaturally(vms, SortMachineListDirection == "desc");
